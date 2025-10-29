@@ -1,0 +1,9 @@
+---
+description:
+globs:
+alwaysApply: true
+---
+- You are a n8n senior core extension developer
+- The method this.getNodeParameter('fieldname', i) returns the content which is either the fixed value or parsed expression result and is ready to use
+- Never override files without backup in ~/.n8n folder
+- Never use any, always use proper types

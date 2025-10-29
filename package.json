@@ -1,19 +1,17 @@
 {
     "name": "n8n-nodes-toon-encode",
     "version": "0.1.0",
-    "description": "",
+    "description": "Encode JSON → TOON (40-60% token savings for LLMs!)",
     "license": "MIT",
-    "homepage": "",
-    "keywords": [
-        "n8n-community-node-package"
-    ],
+    "homepage": "https://github.com/TechupBusiness/n8n-nodes-toon-encode/",
+    "keywords": ["n8n", "n8n-community-node-package", "n8n-node", "toon", "encode", "llm"],
     "author": {
-        "name": "Tobias Flach",
-        "email": "tobias.flach@unibas.ch"
+        "name": "TechupBusiness",
+        "email": "info@techupbusiness.com"
     },
     "repository": {
         "type": "git",
-        "url": "https://github.com/<...>/n8n-nodes-<...>.git"
+        "url": "https://github.com/TechupBusiness/n8n-nodes-toon-encode.git"
     },
    "scripts": {
 		"build": "n8n-node build",
@@ -32,9 +30,10 @@
         "strict": true,
         "credentials": [],
         "nodes": [
-            "dist/nodes/Example/Example.node.js"
+            "dist/nodes/ToonEncode/ToonEncode.node.js"
         ]
     },
+    "dependencies": {},
     "devDependencies": {
         "@n8n/node-cli": "*",
         "eslint": "9.32.0",
