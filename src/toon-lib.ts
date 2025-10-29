@@ -542,25 +542,69 @@ type Token = {
 		delimiter: string;
 		inlineValues?: string;
 	};
+	hadTabIndent: boolean;
+};
+
+type IndentInfo = {
+	count: number;
+	hadTabIndent: boolean;
 };
 
 class Scanner {
 	private lines: string[];
 	private tokens: Token[] = [];
+	private options: Required<DecodeOptions>;
 
-	constructor(input: string) {
+	constructor(input: string, options: DecodeOptions = {}) {
 		this.lines = input.split('\n');
+		this.options = {
+			strict: options.strict ?? true,
+			indent: options.indent ?? 2,
+		};
 	}
 
 	scan(): Token[] {
+		let insideArray = false;
+		let arrayIndent = -1;
+		
 		for (let i = 0; i < this.lines.length; i++) {
 			const line = this.lines[i];
 			
-			// Skip empty lines
-			if (line.trim() === '') continue;
+			// Check for blank lines inside arrays (strict mode only)
+			if (line.trim() === '') {
+				if (this.options.strict && insideArray) {
+					// Peek ahead to see if we're still in the array
+					let nextLineIndex = i + 1;
+					while (nextLineIndex < this.lines.length && this.lines[nextLineIndex].trim() === '') {
+						nextLineIndex++;
+					}
+					if (nextLineIndex < this.lines.length) {
+						const nextLine = this.lines[nextLineIndex];
+						const nextIndent = this.getIndent(nextLine, nextLineIndex + 1);
+						if (nextIndent.count > arrayIndent) {
+							// We're still inside the array
+							const arrayType = this.tokens.length > 0 && this.tokens[this.tokens.length - 1].type === 'LIST_ITEM' ? 'list array' : 'tabular array';
+							throw new Error(`Blank line found inside ${arrayType} (strict mode)`);
+						}
+					}
+				}
+				continue;
+			}
 
-			const indent = this.getIndent(line);
+			const indentInfo = this.getIndent(line, i + 1);
+			const indent = indentInfo.count;
+			const hadTabIndent = indentInfo.hadTabIndent;
 			const trimmed = line.trim();
+			
+			// Track if we're inside an array
+			const arrayCheck = this.parseArrayHeader(trimmed);
+			if (arrayCheck) {
+				insideArray = true;
+				arrayIndent = indent;
+			} else if (insideArray && indent <= arrayIndent) {
+				insideArray = false;
+				arrayIndent = -1;
+			}
 
 			// List item
 			if (trimmed.startsWith('- ')) {
@@ -569,6 +613,7 @@ class Scanner {
 					value: trimmed.substring(2),
 					indent,
 					line: i,
+					hadTabIndent,
 				});
 				continue;
 			}
@@ -582,6 +627,7 @@ class Scanner {
 					indent,
 					line: i,
 					arrayInfo: arrayHeaderMatch,
+					hadTabIndent,
 				});
 				continue;
 			}
@@ -594,10 +640,12 @@ class Scanner {
 					const value = trimmed.substring(colonIndex + 1).trim();
 
 					// Validate if this looks like a key-value pair
-					// Keys shouldn't contain commas (that would be data values)
+					// Quoted keys can contain anything
+					// Unquoted keys shouldn't contain commas (that would be data values)
 					// Keys should be reasonable length (< 100 chars)
 					// Keys should not be purely numeric or contain only numbers and commas
-					const looksLikeKeyValue = !key.includes(',') && key.length < 100 && !/^[\d,\s]+$/.test(key);
+					const isQuotedKey = key.startsWith('"') && key.endsWith('"');
+					const looksLikeKeyValue = isQuotedKey || (!key.includes(',') && key.length < 100 && !/^[\d,\s]+$/.test(key));
 
 					if (looksLikeKeyValue) {
 						this.tokens.push({
@@ -605,6 +653,7 @@ class Scanner {
 							value: this.unescapeKey(key),
 							indent,
 							line: i,
+							hadTabIndent,
 						});
 
 						this.tokens.push({
@@ -612,6 +661,7 @@ class Scanner {
 							value: ':',
 							indent,
 							line: i,
+							hadTabIndent,
 						});
 
 						if (value) {
@@ -620,6 +670,7 @@ class Scanner {
 								value,
 								indent,
 								line: i,
+								hadTabIndent,
 							});
 						}
 						continue;
@@ -633,6 +684,7 @@ class Scanner {
 				value: trimmed,
 				indent,
 				line: i,
+				hadTabIndent,
 			});
 		}
 
@@ -641,19 +693,35 @@ class Scanner {
 			value: '',
 			indent: 0,
 			line: this.lines.length,
+			hadTabIndent: false,
 		});
 
 		return this.tokens;
 	}
 
-	private getIndent(line: string): number {
+	private getIndent(line: string, lineNum: number): IndentInfo {
 		let count = 0;
+		let hadTabIndent = false;
+		
 		for (const char of line) {
-			if (char === ' ') count++;
-			else if (char === '\t') count += 4; // Tab counts as 4 spaces
+			if (char === ' ') {
+				count++;
+			}
+			else if (char === '\t') {
+				if (this.options.strict) {
+					throw new Error(`Indentation error at line ${lineNum}: Tab character found in indentation. Use spaces only.`);
+				}
+				hadTabIndent = true;
+			}
 			else break;
 		}
-		return count;
+		
+		// In strict mode, check indentation is a multiple of indent size
+		if (this.options.strict && count > 0 && count % this.options.indent !== 0) {
+			throw new Error(`Indentation error at line ${lineNum}: Expected indentation to be an exact multiple of ${this.options.indent}, but found ${count} spaces.`);
+		}
+		
+		return { count, hadTabIndent };
 	}
 
 	private findMainColon(str: string): number {
@@ -774,26 +842,48 @@ class Scanner {
 	}
 
 	private unescapeString(str: string): string {
-		return str
-			.replace(/\\n/g, '\n')
-			.replace(/\\r/g, '\r')
-			.replace(/\\t/g, '\t')
-			.replace(/\\"/g, '"')
-			.replace(/\\\\/g, '\\');
+		// Validate escape sequences
+		let result = '';
+		let i = 0;
+		while (i < str.length) {
+			if (str[i] === '\\') {
+				if (i + 1 >= str.length) {
+					throw new Error('Invalid escape sequence: string ends with backslash');
+				}
+				const nextChar = str[i + 1];
+				if (nextChar === 'n') {
+					result += '\n';
+					i += 2;
+				} else if (nextChar === 'r') {
+					result += '\r';
+					i += 2;
+				} else if (nextChar === 't') {
+					result += '\t';
+					i += 2;
+				} else if (nextChar === '"') {
+					result += '"';
+					i += 2;
+				} else if (nextChar === '\\') {
+					result += '\\';
+					i += 2;
+				} else {
+					throw new Error(`Invalid escape sequence: \\${nextChar}`);
+				}
+			} else {
+				result += str[i];
+				i++;
+			}
+		}
+		return result;
 	}
 }
 
 class Parser {
 	private tokens: Token[];
 	private position = 0;
-	private options: Required<DecodeOptions>;
 
-	constructor(tokens: Token[], options: DecodeOptions = {}) {
+	constructor(tokens: Token[]) {
 		this.tokens = tokens;
-		this.options = {
-			strict: options.strict ?? false,
-			indent: options.indent ?? 2,
-		};
 	}
 
 	parse(): JsonValue {
@@ -838,38 +928,49 @@ class Parser {
 
 					const nextToken = this.current();
 
-					// Empty value (nested object or array on next lines)
-					// Special case for indent 0: treat same-level keys as nested (compact mode)
-					const isCompactNested = token.indent === 0 && nextToken?.indent === 0 && nextToken?.type === 'KEY';
-					
-					if (!nextToken || nextToken.type === 'EOF' || nextToken.indent > token.indent || isCompactNested) {
-						const nextIndent = nextToken?.indent ?? token.indent + 1;
+					// VALUE token at nested level without colon is an error
+					if (nextToken && nextToken.type === 'VALUE' && nextToken.indent > token.indent) {
+						throw new Error(`Missing colon after key "${nextToken.value}" (found nested value without colon)`);
+					}
 
-						// Check if next is array header
-						if (nextToken?.type === 'ARRAY_HEADER') {
-							result[key] = this.parseArray();
-						}
-						// Check if next is list item
-						else if (nextToken?.type === 'LIST_ITEM') {
-							result[key] = this.parseListItems(nextIndent);
-						}
-						// Nested object
-						else if (nextToken?.type === 'KEY') {
-							result[key] = this.parseObject(nextIndent);
-						}
-						else {
-							result[key] = {};
-						}
-					}
-					// Inline value
-					else if (nextToken.type === 'VALUE') {
-						result[key] = this.parsePrimitive(nextToken.value);
-						this.advance();
-					}
-					// Array header on same line
-					else if (nextToken.type === 'ARRAY_HEADER') {
+				// Empty value (nested object or array on next lines)
+				// Special case for indent 0: treat same-level keys as nested (compact mode)
+				// But tab-indented keys at same indent are siblings, not nested
+				const isCompactNested = token.indent === 0 && nextToken?.indent === 0 && nextToken?.type === 'KEY' && nextToken?.hadTabIndent !== true;
+				const isTabSibling = nextToken?.type === 'KEY' && nextToken?.hadTabIndent === true && nextToken?.indent === token.indent;
+				
+				if (isTabSibling) {
+					// Tab-indented key at same level is a sibling, not nested
+					result[key] = {};
+				}
+				else if (!nextToken || nextToken.type === 'EOF' || nextToken.indent > token.indent || isCompactNested) {
+					const nextIndent = nextToken?.indent ?? token.indent + 1;
+
+					// Check if next is array header
+					if (nextToken?.type === 'ARRAY_HEADER') {
 						result[key] = this.parseArray();
 					}
+					// Check if next is list item
+					else if (nextToken?.type === 'LIST_ITEM') {
+						result[key] = this.parseListItems(nextIndent);
+					}
+					// Nested object
+					else if (nextToken?.type === 'KEY') {
+						result[key] = this.parseObject(nextIndent);
+					}
+					else {
+						result[key] = {};
+					}
+				}
+				// Inline value
+				else if (nextToken.type === 'VALUE') {
+					result[key] = this.parsePrimitive(nextToken.value);
+					this.advance();
+				}
+				// Array header on same line
+				else if (nextToken.type === 'ARRAY_HEADER') {
+					result[key] = this.parseArray();
+				}
 				}
 			}
 			else {
@@ -905,53 +1006,72 @@ class Parser {
 			if (token.indent < baseIndent) break;
 			if (token.indent > baseIndent && baseIndent > 0) break;
 
-			if (token.type === 'KEY') {
-				const key = token.value;
-				this.advance(); // Move past KEY
+	if (token.type === 'KEY') {
+		const key = token.value;
+		this.advance(); // Move past KEY
 
-				// Expect COLON
-				if (this.current()?.type === 'COLON') {
-					this.advance(); // Move past COLON
+		// Expect COLON
+		const colonToken = this.current();
+		if (!colonToken || colonToken.type !== 'COLON') {
+			throw new Error(`Missing colon after key "${key}"`);
+		}
+		this.advance(); // Move past COLON
 
-					const nextToken = this.current();
+		const nextToken = this.current();
 
-					// Empty value (nested object or array on next lines)
-					// Special case for indent 0: treat same-level keys as nested (compact mode)
-					const isCompactNested = baseIndent === 0 && nextToken?.indent === 0 && nextToken?.type === 'KEY';
-					
-					if (!nextToken || nextToken.type === 'EOF' || nextToken.indent > token.indent || isCompactNested) {
-						const nextIndent = nextToken?.indent ?? token.indent + 1;
+		// VALUE token at nested level without colon is an error
+		if (nextToken && nextToken.type === 'VALUE' && nextToken.indent > token.indent) {
+			throw new Error(`Missing colon after key "${nextToken.value}" (found nested value without colon)`);
+		}
 
-						// Check if next is array header
-						if (nextToken?.type === 'ARRAY_HEADER') {
-							result[key] = this.parseArray();
-						}
-						// Check if next is list item
-						else if (nextToken?.type === 'LIST_ITEM') {
-							result[key] = this.parseListItems(nextIndent);
-						}
-						// Nested object
-						else if (nextToken?.type === 'KEY') {
-							result[key] = this.parseObject(nextIndent);
-						}
-						else {
-							result[key] = {};
-						}
-					}
-					// Inline value
-					else if (nextToken.type === 'VALUE') {
-						result[key] = this.parsePrimitive(nextToken.value);
-						this.advance();
-					}
-					// Array header on same line
-					else if (nextToken.type === 'ARRAY_HEADER') {
-						result[key] = this.parseArray();
-					}
-				}
+		// Empty value (nested object or array on next lines)
+		// Special case for indent 0: treat same-level keys as nested (compact mode)
+		// But tab-indented keys at same indent are siblings, not nested
+		const isCompactNested = baseIndent === 0 && nextToken?.indent === 0 && nextToken?.type === 'KEY' && nextToken?.hadTabIndent !== true;
+		const isTabSibling = nextToken?.type === 'KEY' && nextToken?.hadTabIndent === true && nextToken?.indent === token.indent;
+		
+		if (isTabSibling) {
+			// Tab-indented key at same level is a sibling, not nested
+			result[key] = {};
+			// Don't break - let the loop continue to parse the sibling
+		}
+		else if (!nextToken || nextToken.type === 'EOF' || nextToken.indent > token.indent || isCompactNested) {
+			const nextIndent = nextToken?.indent ?? token.indent + 1;
+
+			// Check if next is array header
+			if (nextToken?.type === 'ARRAY_HEADER') {
+				result[key] = this.parseArray();
+			}
+			// Check if next is list item
+			else if (nextToken?.type === 'LIST_ITEM') {
+				result[key] = this.parseListItems(nextIndent);
+			}
+			// Nested object
+			else if (nextToken?.type === 'KEY') {
+				result[key] = this.parseObject(nextIndent);
 			}
 			else {
-				break;
+				result[key] = {};
 			}
+		}
+		// Inline value
+		else if (nextToken.type === 'VALUE') {
+			result[key] = this.parsePrimitive(nextToken.value);
+			this.advance();
+		}
+		// Array header on same line
+		else if (nextToken.type === 'ARRAY_HEADER') {
+			result[key] = this.parseArray();
+		}
+	}
+		// Handle ARRAY_HEADER tokens that appear as object fields (e.g., data[0]:)
+		else if (token.type === 'ARRAY_HEADER' && token.arrayInfo?.key) {
+			const key = token.arrayInfo.key;
+			result[key] = this.parseArray();
+		}
+		else {
+			break;
+		}
 		}
 
 		return result;
@@ -979,12 +1099,33 @@ class Parser {
 		// Check for inline values first (e.g., tags[2]: foo,bar)
 		if (inlineValues) {
 			const values = this.splitByDelimiter(inlineValues, delimiter);
+			// Validate length
+			if (values.length !== length) {
+				throw new Error(`Array length mismatch: expected ${length} elements, but found ${values.length}`);
+			}
 			result.push(...values.map((v) => this.parsePrimitive(v.trim())));
 			return result;
 		}
 
 		// Tabular format (with fields)
 		if (fields && fields.length > 0) {
+			// Count how many rows we'll actually parse
+			let rowCount = 0;
+			let tempPos = this.position;
+			while (tempPos < this.tokens.length) {
+				const token = this.tokens[tempPos];
+				if (!token || token.type === 'EOF') break;
+				if (token.indent <= arrayIndent) break;
+				if (token.type === 'VALUE') rowCount++;
+				else break;
+				tempPos++;
+			}
+			
+			// Validate row count before parsing
+			if (rowCount !== length) {
+				throw new Error(`Tabular array row count mismatch: expected ${length} rows, but found ${rowCount}`);
+			}
+			
 			for (let i = 0; i < length; i++) {
 				const rowToken = this.current();
 
@@ -992,7 +1133,14 @@ class Parser {
 				if (rowToken.indent <= arrayIndent) break;
 
 				if (rowToken.type === 'VALUE') {
+					// Parse values
 					const values = this.splitByDelimiter(rowToken.value, delimiter);
+					
+					// Validate field count matches
+					if (values.length !== fields.length) {
+						throw new Error(`Tabular row value count mismatch: expected ${fields.length} fields, but found ${values.length}`);
+					}
+					
 					const obj: JsonObject = {};
 
 					for (let j = 0; j < fields.length; j++) {
@@ -1010,13 +1158,30 @@ class Parser {
 		}
 		// List format
 		else if (this.current()?.type === 'LIST_ITEM') {
-			result.push(...this.parseListItems(arrayIndent + 1));
+			const items = this.parseListItems(arrayIndent + 1);
+			result.push(...items);
+			
+			// For list format, we can't reliably validate length when objects contain nested arrays
+			// since the structure is more complex. Only validate for simple cases.
+			const hasComplexNesting = items.some(item => 
+				isJsonObject(item) && Object.values(item).some(v => isJsonArray(v))
+			);
+			
+			if (!hasComplexNesting && items.length !== length) {
+				throw new Error(`List array length mismatch: expected ${length} items, but found ${items.length}`);
+			}
 		}
 		// Primitive array (inline on next line)
 		else if (this.current()?.type === 'VALUE') {
 			const valueToken = this.current();
 			if (valueToken.indent > arrayIndent) {
 				const values = this.splitByDelimiter(valueToken.value, delimiter);
+				
+				// Validate length
+				if (values.length !== length) {
+					throw new Error(`Array length mismatch: expected ${length} elements, but found ${values.length}`);
+				}
+				
 				result.push(...values.map((v) => this.parsePrimitive(v.trim())));
 				this.advance();
 			}
@@ -1036,11 +1201,13 @@ class Parser {
 			if (token.indent < baseIndent) break;
 
 			const content = token.value;
+			const itemIndent = token.indent;
 			this.advance();
 
-			// First, check if the entire content is an array header pattern
+			// First, check if the entire content is an array header pattern WITHOUT a key
+			// (e.g., "[2]: 1,2" not "matrix[2]:")
 			const fullArrayMatch = this.parseArrayHeaderString(content);
-			if (fullArrayMatch) {
+			if (fullArrayMatch && !fullArrayMatch.key) {
 				// This is an inline array like "[2]: 1,2"
 				const arrayResult = this.parseInlineArray(fullArrayMatch);
 				result.push(arrayResult);
@@ -1055,33 +1222,114 @@ class Parser {
 
 				const obj: JsonObject = {};
 
+				// Check if key itself is an array header (e.g., "users[2]{id,name}")
+				const keyArrayMatch = this.parseArrayHeaderString(key + ':');
+				if (keyArrayMatch && keyArrayMatch.key) {
+					// Parse as a nested array
+					const actualKey = keyArrayMatch.key;
+					
+					// Check next token for array data or inline values
+					const nextToken = this.current();
+					if (value) {
+						// Inline values in the array header
+						const inlineMatch = this.parseArrayHeaderString(key + ': ' + value);
+						if (inlineMatch) {
+							obj[actualKey] = this.parseInlineArray(inlineMatch);
+						}
+					} else if (nextToken && nextToken.indent > itemIndent) {
+					// Array data on following lines
+					// Create a fake ARRAY_HEADER token and parse it
+					const arrayHeaderToken: Token = {
+						type: 'ARRAY_HEADER',
+						value: key + ':',
+						indent: itemIndent,
+						line: token.line,
+						hadTabIndent: false,
+						arrayInfo: {
+							key: actualKey,
+							length: keyArrayMatch.length,
+							fields: keyArrayMatch.fields,
+							delimiter: keyArrayMatch.delimiter,
+						}
+					};
+						
+						// Temporarily inject this token for parsing
+						this.position--;
+						this.tokens[this.position] = arrayHeaderToken;
+						obj[actualKey] = this.parseArray();
+					} else {
+						// Empty array
+						obj[actualKey] = [];
+					}
+					
+				// Check for additional properties on following lines
+				const nextToken2 = this.current();
+				if (nextToken2 && nextToken2.indent > itemIndent && (nextToken2.type === 'KEY' || nextToken2.type === 'ARRAY_HEADER')) {
+					const nestedObj = this.parseObject(nextToken2.indent);
+					Object.assign(obj, nestedObj);
+				}
+					
+					result.push(obj);
+					continue;
+				}
+
 				// Check for array header in value
 				const arrayMatch = this.parseArrayHeaderString(value);
 				if (arrayMatch) {
-					const arrayResult = this.parseInlineArray(arrayMatch);
-					obj[this.unescapeKey(key)] = arrayResult;
-					
-					// Check for additional properties on following lines
-					const nextToken = this.current();
-					if (nextToken && nextToken.indent > token.indent && nextToken.type === 'KEY') {
-						const nestedObj = this.parseObject(nextToken.indent);
-						Object.assign(obj, nestedObj);
+					// Check if this is an empty array or has inline values
+					if (arrayMatch.length === 0) {
+						obj[this.unescapeKey(key)] = [];
+					} else if (arrayMatch.valuesStr) {
+						const arrayResult = this.parseInlineArray(arrayMatch);
+						obj[this.unescapeKey(key)] = arrayResult;
+					} else {
+						// Array with data on following lines
+						const nextToken = this.current();
+						if (nextToken && nextToken.indent > itemIndent) {
+						// Create a fake ARRAY_HEADER token and parse it
+						const arrayHeaderToken: Token = {
+							type: 'ARRAY_HEADER',
+							value: key + ': ' + value,
+							indent: itemIndent,
+							line: token.line,
+							hadTabIndent: false,
+							arrayInfo: {
+								length: arrayMatch.length,
+								fields: arrayMatch.fields,
+								delimiter: arrayMatch.delimiter,
+							}
+						};
+							
+							// Temporarily inject this token for parsing
+							this.position--;
+							this.tokens[this.position] = arrayHeaderToken;
+							obj[this.unescapeKey(key)] = this.parseArray();
+						} else {
+							obj[this.unescapeKey(key)] = [];
+						}
 					}
-				}
-				else if (value) {
-					obj[this.unescapeKey(key)] = this.parsePrimitive(value);
 					
-					// Check for additional properties on following lines
-					const nextToken = this.current();
-					if (nextToken && nextToken.indent > token.indent && nextToken.type === 'KEY') {
-						const nestedObj = this.parseObject(nextToken.indent);
-						Object.assign(obj, nestedObj);
-					}
+				// Check for additional properties on following lines
+				const nextToken = this.current();
+				if (nextToken && nextToken.indent > itemIndent && (nextToken.type === 'KEY' || nextToken.type === 'ARRAY_HEADER')) {
+					const nestedObj = this.parseObject(nextToken.indent);
+					Object.assign(obj, nestedObj);
 				}
+			}
+			else if (value) {
+				obj[this.unescapeKey(key)] = this.parsePrimitive(value);
+				
+				// Check for additional properties on following lines
+				const nextToken = this.current();
+				if (nextToken && nextToken.indent > itemIndent && (nextToken.type === 'KEY' || nextToken.type === 'ARRAY_HEADER')) {
+					const nestedObj = this.parseObject(nextToken.indent);
+					Object.assign(obj, nestedObj);
+				}
+			}
 				else {
 					// Empty value, check for nested content
 					const nextToken = this.current();
-					if (nextToken && nextToken.indent > token.indent) {
+					if (nextToken && nextToken.indent > itemIndent) {
 						if (nextToken.type === 'KEY') {
 							obj[this.unescapeKey(key)] = this.parseObject(nextToken.indent);
 						}
@@ -1091,9 +1339,12 @@ class Parser {
 						else if (nextToken.type === 'LIST_ITEM') {
 							obj[this.unescapeKey(key)] = this.parseListItems(nextToken.indent);
 						}
+						else {
+							obj[this.unescapeKey(key)] = {};
+						}
 					}
 					else {
-						obj[this.unescapeKey(key)] = null;
+						obj[this.unescapeKey(key)] = {};
 					}
 				}
 
@@ -1130,20 +1381,21 @@ class Parser {
 		return result;
 	}
 
-	private parseArrayHeaderString(str: string): { length: number; fields?: string[]; delimiter: string; valuesStr: string } | null {
-		const arrayPattern = /^\[([#])?(\d+)([,\t|])?\](?:\{([^}]+)\})?:\s*(.*)$/;
+	private parseArrayHeaderString(str: string): { key?: string; length: number; fields?: string[]; delimiter: string; valuesStr: string } | null {
+		const arrayPattern = /^(?:([^[\]]+))?\[([#])?(\d+)([,\t|])?\](?:\{([^}]+)\})?:\s*(.*)$/;
 		const match = str.match(arrayPattern);
 
 		if (!match) return null;
 
-		const [, , lengthStr, delimiterInHeader, fieldsStr, valuesStr] = match;
+		const [, key, , lengthStr, delimiterInHeader, fieldsStr, valuesStr] = match;
 
 		let delimiter = ',';
 		if (delimiterInHeader) {
 			delimiter = delimiterInHeader;
 		}
 
-		const result: { length: number; fields?: string[]; delimiter: string; valuesStr: string } = {
+		const result: { key?: string; length: number; fields?: string[]; delimiter: string; valuesStr: string } = {
+			key: key?.trim() || undefined,
 			length: parseInt(lengthStr, 10),
 			delimiter,
 			valuesStr: valuesStr || '',
@@ -1234,12 +1486,39 @@ class Parser {
 	}
 
 	private unescapeString(str: string): string {
-		return str
-			.replace(/\\n/g, '\n')
-			.replace(/\\r/g, '\r')
-			.replace(/\\t/g, '\t')
-			.replace(/\\"/g, '"')
-			.replace(/\\\\/g, '\\');
+		// Validate escape sequences
+		let result = '';
+		let i = 0;
+		while (i < str.length) {
+			if (str[i] === '\\') {
+				if (i + 1 >= str.length) {
+					throw new Error('Invalid escape sequence: string ends with backslash');
+				}
+				const nextChar = str[i + 1];
+				if (nextChar === 'n') {
+					result += '\n';
+					i += 2;
+				} else if (nextChar === 'r') {
+					result += '\r';
+					i += 2;
+				} else if (nextChar === 't') {
+					result += '\t';
+					i += 2;
+				} else if (nextChar === '"') {
+					result += '"';
+					i += 2;
+				} else if (nextChar === '\\') {
+					result += '\\';
+					i += 2;
+				} else {
+					throw new Error(`Invalid escape sequence: \\${nextChar}`);
+				}
+			} else {
+				result += str[i];
+				i++;
+			}
+		}
+		return result;
 	}
 
 	private parsePrimitive(value: string): JsonPrimitive {
@@ -1249,14 +1528,19 @@ class Parser {
 		if (trimmed === 'true') return true;
 		if (trimmed === 'false') return false;
 
-		// Try to parse as number
-		if (/^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(trimmed)) {
+		// Try to parse as number (reject leading zeros like 05, 007)
+		// Valid: 0, -0, 123, -456, 3.14, 1e5, 1.5e-10
+		// Invalid: 05, 007, 0123 (these should remain strings)
+		if (/^-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?$/.test(trimmed)) {
 			const num = Number(trimmed);
 			if (!Number.isNaN(num) && Number.isFinite(num)) return num;
 		}
 
 		// String - remove quotes if present
-		if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+		if (trimmed.startsWith('"')) {
+			if (!trimmed.endsWith('"') || trimmed.length < 2) {
+				throw new Error('Unterminated quoted string');
+			}
 			return this.unescapeString(trimmed.substring(1, trimmed.length - 1));
 		}
 
@@ -1269,9 +1553,9 @@ export function decode(input: string, options?: DecodeOptions): JsonValue {
 		return null;
 	}
 
-	const scanner = new Scanner(input);
+	const scanner = new Scanner(input, options);
 	const tokens = scanner.scan();
 	
-	const parser = new Parser(tokens, options);
+	const parser = new Parser(tokens);
 	return parser.parse();
 }
