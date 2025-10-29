@@ -5,3 +5,8 @@ tmp
 dist
 npm-debug.log*
 yarn.lock
+.test-encode-temp.js
+
+# Test temp files
+.test-temp.cjs
+.test-official-temp.js

@@ -67,6 +67,18 @@ Tab:   Alice	30	NYC
 Pipe:  Alice|30|NYC
 ```
 
+**Note (v0.4.1+):** When using a non-default delimiter (Tab or Pipe), the delimiter is included in array headers AND used to separate both column names and values:
+```
+Comma:  users[3]{name,age,city}:
+        Alice,30,NYC
+        
+Tab:    users[3	]{name	age	city}:
+        Alice	30	NYC
+        
+Pipe:   users[3|]{name|age|city}:
+        Alice|30|NYC
+```
+
 ### Length Markers
 Whether to prefix array lengths with `#` for LLM safety.
 
@@ -238,6 +250,12 @@ Verify the input data type. TOON works with:
 ## Version
 
 Current version: 0.1.0
+TOON encoder: v0.4.1
+
+### What's New in v0.4.1
+- **Delimiter in headers**: Non-default delimiters (Tab, Pipe) are now included in array headers for better clarity
+- **Improved code structure**: Better organized and more maintainable encoder implementation
+- **Enhanced type safety**: Better TypeScript types and type guards
 
 For updates and changelog, see the [GitHub repository](https://github.com/TechupBusiness/n8n-nodes-toon-encode).
 

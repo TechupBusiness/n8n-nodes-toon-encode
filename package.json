@@ -19,6 +19,9 @@
 		"dev": "n8n-node dev",
 		"lint": "n8n-node lint",
 		"lint:fix": "n8n-node lint --fix",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"test:official": "vitest run test/official-encode.test.ts",
 		"release": "n8n-node release",
 		"prepublishOnly": "n8n-node prerelease"
 	},
@@ -30,7 +33,8 @@
         "strict": true,
         "credentials": [],
         "nodes": [
-            "dist/nodes/ToonEncode/ToonEncode.node.js"
+            "dist/nodes/ToonEncode/ToonEncode.node.js",
+            "dist/nodes/ToonDecode/ToonDecode.node.js"
         ]
     },
     "dependencies": {},
@@ -39,7 +43,8 @@
         "eslint": "9.32.0",
         "prettier": "3.6.2",
         "release-it": "^19.0.4",
-        "typescript": "5.9.2"
+        "typescript": "5.9.2",
+        "vitest": "^2.1.8"
     },
     "peerDependencies": {
         "n8n-workflow": "*"

@@ -17,6 +17,7 @@ TOON is a token-efficient alternative to JSON designed specifically for Large La
     - [Basic Example](#basic-example)
     - [Use Cases](#use-cases)
     - [Tips](#tips)
+  - [Development \& Testing](#development--testing)
   - [Resources](#resources)
   - [License](#license)
 
@@ -107,6 +108,19 @@ users[2]{name,age,city}:
 - Use `={{ $json.results }}` to encode a specific field
 - Set **Indent** to `0` for maximum token savings (compact format)
 - Enable **Length Markers** when passing arrays to LLMs for better reliability
+
+## Development & Testing
+
+This node is tested against the [official TOON test suite](https://github.com/johannschopplich/toon/tree/main/test) to ensure 100% spec compliance.
+
+**Run Tests:**
+```bash
+npm install
+npm run build
+npm test
+```
+
+See [test/README.md](test/README.md) for comprehensive testing documentation.
 
 ## Resources
 
