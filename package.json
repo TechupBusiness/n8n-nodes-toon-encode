@@ -1,10 +1,17 @@
 {
     "name": "n8n-nodes-toon-encode",
-    "version": "0.0.0",
+    "version": "1.0.0",
     "description": "Encode JSON → TOON (40-60% token savings for LLMs!)",
     "license": "MIT",
     "homepage": "https://github.com/TechupBusiness/n8n-nodes-toon-encode/",
-    "keywords": ["n8n", "n8n-community-node-package", "n8n-node", "toon", "encode", "llm"],
+    "keywords": [
+        "n8n",
+        "n8n-community-node-package",
+        "n8n-node",
+        "toon",
+        "encode",
+        "llm"
+    ],
     "author": {
         "name": "TechupBusiness",
         "email": "info@techupbusiness.com"
@@ -13,18 +20,18 @@
         "type": "git",
         "url": "https://github.com/TechupBusiness/n8n-nodes-toon-encode.git"
     },
-   "scripts": {
-		"build": "n8n-node build",
-		"build:watch": "tsc --watch",
-		"dev": "n8n-node dev",
-		"lint": "n8n-node lint",
-		"lint:fix": "n8n-node lint --fix",
-		"test": "vitest run",
-		"test:watch": "vitest",
-		"test:official": "vitest run test/official-encode.test.ts",
-		"release": "n8n-node release",
-		"prepublishOnly": "n8n-node prerelease"
-	},
+    "scripts": {
+        "build": "n8n-node build",
+        "build:watch": "tsc --watch",
+        "dev": "n8n-node dev",
+        "lint": "n8n-node lint",
+        "lint:fix": "n8n-node lint --fix",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "test:official": "vitest run test/official-encode.test.ts",
+        "release": "n8n-node release",
+        "prepublishOnly": "n8n-node prerelease"
+    },
     "files": [
         "dist"
     ],
