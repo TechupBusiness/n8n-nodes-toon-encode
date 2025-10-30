@@ -1,6 +1,6 @@
 {
     "name": "n8n-nodes-toon-encode",
-    "version": "0.1.0",
+    "version": "0.0.0",
     "description": "Encode JSON → TOON (40-60% token savings for LLMs!)",
     "license": "MIT",
     "homepage": "https://github.com/TechupBusiness/n8n-nodes-toon-encode/",
