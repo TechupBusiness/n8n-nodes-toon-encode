@@ -6,6 +6,12 @@ TOON is a token-efficient alternative to JSON designed specifically for Large La
 
 [n8n](https://n8n.io/) is a [fair-code licensed](https://docs.n8n.io/sustainable-use-license/) workflow automation platform.
 
+![TOON Nodes](readme-toon-icons.png)
+
+**Available Nodes:**
+- **TOON Encode**: Convert JSON to compact TOON format (40-60% token savings)
+- **TOON Decode**: Convert TOON back to JSON for further processing
+
 **Table of Contents**
 - [n8n-nodes-toon-encode](#n8n-nodes-toon-encode)
   - [Installation](#installation)
